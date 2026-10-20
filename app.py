@@ -155,7 +155,7 @@ class SignupApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("1180x780")
+        self.geometry("1120x740")
         self.minsize(980, 660)
         try:
             self.data = load_data()
@@ -249,8 +249,15 @@ class SignupApp(tk.Tk):
             indicator.configure(bg=self.colors["blue"] if active else "#ffffff")
 
     def _clear(self):
+        # Keep the normal (non-maximized) window size stable while pages are rebuilt.
+        # Some Tk themes recalculate the requested size after destroying page widgets.
+        keep_size = self.state() == "normal"
+        width, height = self.winfo_width(), self.winfo_height()
         for widget in self.content.winfo_children():
             widget.destroy()
+        if keep_size and width > 1 and height > 1:
+            self.after_idle(lambda w=width, h=height: self.geometry(f"{w}x{h}")
+                            if self.winfo_exists() and self.state() == "normal" else None)
 
     def _header(self, title, subtitle):
         ttk.Label(self.content, text=title, style="Title.TLabel").pack(anchor="w")
