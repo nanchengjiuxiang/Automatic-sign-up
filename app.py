@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import calendar
 import ctypes
 import json
 import os
@@ -277,8 +278,8 @@ class SignupApp(tk.Tk):
         ttk.Button(bar, text="＋  新建报名任务", style="Create.TButton", command=self._task_editor).pack(side="right")
         page_actions = tk.Frame(bar, bg=self.colors["bg"])
         page_actions.pack(side="right", padx=(0, 10))
-        ttk.Button(page_actions, text="只读检查控件树", command=self._inspect_qq_page, style="Primary.TButton").pack(side="left", padx=(0, 8))
-        ttk.Button(page_actions, text="连接并预检 QQ 页面", command=self._preflight_qq_page, style="Primary.TButton").pack(side="left")
+        ttk.Button(page_actions, text="检查 QQ 页面", command=self._inspect_qq_page, style="Primary.TButton").pack(side="left", padx=(0, 8))
+        ttk.Button(page_actions, text="连接当前 QQ 页面", command=self._preflight_qq_page, style="Primary.TButton").pack(side="left")
 
         tasks = self.data["tasks"]
         pending_count = sum(task.get("status") == "待执行" for task in tasks)
@@ -303,7 +304,7 @@ class SignupApp(tk.Tk):
         tk.Label(note_left, text="执行设置", bg="#ffffff", fg=self.colors["ink"], font=("Microsoft YaHei UI", 10, "bold")).pack(anchor="w")
         binding = self.data.get("binding")
         binding_text = (f"已绑定：{binding.get('title', 'QQ')}；详情页识别分数 {binding.get('detail_score', 0):.2f}；检查于 {binding.get('checked_at', '')}。"
-                        if binding else "尚未绑定 QQ 活动页。请打开目标活动详情页后连接并预检。")
+                        if binding else "尚未绑定 QQ 活动页。请打开目标活动详情页后点击“连接当前 QQ 页面”。")
         tk.Label(note_left, text=binding_text + " 正式执行前会再次核对页面；预检只读，不会填写或提交。", bg="#ffffff", fg=self.colors["muted"], wraplength=600, justify="left", font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(4, 0))
         retry_row = tk.Frame(note_body, bg="#f5f8fc", highlightbackground=self.colors["line"], highlightthickness=1)
         retry_row.pack(side="right", padx=(16, 0), ipadx=10, ipady=4)
@@ -312,14 +313,14 @@ class SignupApp(tk.Tk):
         setting_line = tk.Frame(retry_row, bg="#f5f8fc"); setting_line.pack(anchor="w", padx=8, pady=(0, 2))
         ttk.Spinbox(setting_line, from_=1, to=600, increment=1, width=6, textvariable=self.retry_seconds_var).pack(side="left")
         tk.Label(setting_line, text="秒", bg="#f5f8fc", fg=self.colors["muted"]).pack(side="left", padx=4)
-        ttk.Button(setting_line, text="保存", command=self._save_retry_duration, style="Primary.TButton").pack(side="left", padx=(7, 0))
+        ttk.Button(setting_line, text="保存时长", command=self._save_retry_duration, style="Primary.TButton").pack(side="left", padx=(7, 0))
 
         panel = self._panel(); panel.pack(fill="both", expand=True)
         panel_head = tk.Frame(panel, bg="#ffffff"); panel_head.pack(fill="x", padx=17, pady=(13, 3))
         tk.Label(panel_head, text="报名排期", bg="#ffffff", fg=self.colors["ink"], font=("Microsoft YaHei UI", 11, "bold")).pack(side="left")
         panel_actions = tk.Frame(panel_head, bg="#ffffff"); panel_actions.pack(side="right")
         ttk.Button(panel_actions, text="编辑选中任务", command=lambda: self._edit_selected(tree)).pack(side="right", padx=(8, 0))
-        ttk.Button(panel_actions, text="删除选中", command=lambda: self._delete_selected(tree)).pack(side="right")
+        ttk.Button(panel_actions, text="删除所选任务", command=lambda: self._delete_selected(tree)).pack(side="right")
         columns = ("activity", "start", "status")
         table = tk.Frame(panel, bg="#ffffff"); table.pack(fill="both", expand=True, padx=15, pady=(5, 13))
         tree = ttk.Treeview(table, columns=columns, show="headings", height=7)
@@ -547,9 +548,16 @@ class SignupApp(tk.Tk):
         for label, key, default in [("目标小程序", "miniapp", "报名接龙工具"), ("活动名称", "activity", ""), ("报名开始时间", "start_at", "")]:
             row = tk.Frame(form, bg="#ffffff"); row.pack(fill="x", padx=17, pady=5)
             tk.Label(row, text=label, width=18, anchor="w", bg="#ffffff", fg=self.colors["muted"], font=("Microsoft YaHei UI", 9)).pack(side="left")
-            entry = ttk.Entry(row); entry.pack(side="left", fill="x", expand=True)
-            entry.insert(0, str(task.get(key, default))); values[key] = entry
-        tk.Label(form, text="时间格式：YYYY-MM-DD HH:MM:SS    例如：2026-10-24 19:00:00", bg="#ffffff", fg=self.colors["muted"], font=("Microsoft YaHei UI", 8)).pack(anchor="w", padx=17, pady=(0, 11))
+            if key == "start_at":
+                entry = ttk.Entry(row, state="readonly")
+                entry.pack(side="left", fill="x", expand=True)
+                entry.configure(state="normal"); entry.insert(0, str(task.get(key, default))); entry.configure(state="readonly")
+                ttk.Button(row, text="选择日期和时间…", command=lambda e=entry: self._open_datetime_picker(win, e)).pack(side="left", padx=(8, 0))
+            else:
+                entry = ttk.Entry(row); entry.pack(side="left", fill="x", expand=True)
+                entry.insert(0, str(task.get(key, default)))
+            values[key] = entry
+        tk.Label(form, text="请使用右侧选择器设置报名开始日期和时间。", bg="#ffffff", fg=self.colors["muted"], font=("Microsoft YaHei UI", 8)).pack(anchor="w", padx=17, pady=(0, 11))
         tk.Label(frame, text="报名字段", bg=self.colors["bg"], fg=self.colors["ink"], font=("Microsoft YaHei UI", 11, "bold")).pack(anchor="w", pady=(9, 2))
         tk.Label(frame, text="页面字段名按小程序标签填写；运行时用文字识别匹配，顺序无关。未出现在页面的预设项会跳过。", bg=self.colors["bg"], fg=self.colors["muted"], font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(0, 5))
         tablewrap = self._panel(frame); tablewrap.pack(fill="both", expand=True)
@@ -563,13 +571,101 @@ class SignupApp(tk.Tk):
         value_in = ttk.Entry(fieldrow); value_in.insert(0, "预填内容"); value_in.pack(side="left", fill="x", expand=True, padx=7)
         fields_tree.bind("<<TreeviewSelect>>", lambda _event: self._load_selected_field(fields_tree, label_in, value_in))
         ttk.Button(fieldrow, text="添加字段", command=lambda: self._add_field(fields_tree, label_in, value_in)).pack(side="left")
-        ttk.Button(fieldrow, text="更新选中", command=lambda: self._update_field(fields_tree, label_in, value_in)).pack(side="left", padx=(7, 0))
-        ttk.Button(fieldrow, text="删除选中", command=lambda: self._delete_fields(fields_tree)).pack(side="left", padx=(7, 0))
+        ttk.Button(fieldrow, text="更新字段", command=lambda: self._update_field(fields_tree, label_in, value_in)).pack(side="left", padx=(7, 0))
+        ttk.Button(fieldrow, text="删除所选字段", command=lambda: self._delete_fields(fields_tree)).pack(side="left", padx=(7, 0))
         if self.data["profile"]:
             ttk.Button(fieldrow, text="导入个人资料", command=lambda: self._import_profile(fields_tree)).pack(side="left", padx=(7, 0))
         tk.Label(frame, text="隐私选项默认保留小程序的“不公开信息”设置。", bg=self.colors["bg"], fg=self.colors["muted"], anchor="w", justify="left", wraplength=700, font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(0, 4))
         ttk.Button(bottom, text="取消", command=win.destroy).pack(side="right")
         ttk.Button(bottom, text="保存任务", style="Primary.TButton", command=lambda: self._save_task(win, task, values, fields_tree)).pack(side="right", padx=8)
+
+    def _open_datetime_picker(self, parent, target_entry):
+        try:
+            current = datetime.strptime(target_entry.get().strip(), "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            current = datetime.now().replace(second=0, microsecond=0)
+        selected = [current]
+        picker = tk.Toplevel(parent)
+        picker.title("选择报名开始时间")
+        picker.geometry("370x430")
+        picker.resizable(False, False)
+        picker.transient(parent)
+        picker.grab_set()
+        picker.configure(bg=self.colors["bg"])
+
+        header = tk.Frame(picker, bg=self.colors["bg"])
+        header.pack(fill="x", padx=18, pady=(16, 8))
+        month_label = tk.Label(header, bg=self.colors["bg"], fg=self.colors["ink"], font=("Microsoft YaHei UI", 12, "bold"))
+        month_label.pack(side="left", expand=True)
+        calendar_frame = tk.Frame(picker, bg="#ffffff", padx=10, pady=10)
+        calendar_frame.pack(fill="both", expand=True, padx=16)
+
+        def change_month(delta):
+            old = selected[0]
+            month_index = old.year * 12 + old.month - 1 + delta
+            year, month_zero = divmod(month_index, 12)
+            month = month_zero + 1
+            day = min(old.day, calendar.monthrange(year, month)[1])
+            selected[0] = old.replace(year=year, month=month, day=day)
+            render_calendar()
+
+        ttk.Button(header, text="上月", width=5, command=lambda: change_month(-1)).pack(side="left")
+        ttk.Button(header, text="下月", width=5, command=lambda: change_month(1)).pack(side="right")
+
+        def render_calendar():
+            for child in calendar_frame.winfo_children():
+                child.destroy()
+            date = selected[0]
+            month_label.configure(text=f"{date.year} 年 {date.month} 月")
+            for col, day_name in enumerate(("一", "二", "三", "四", "五", "六", "日")):
+                tk.Label(calendar_frame, text=day_name, bg="#ffffff", fg=self.colors["muted"],
+                         font=("Microsoft YaHei UI", 9, "bold"), width=4).grid(row=0, column=col, pady=(0, 5))
+            first_weekday, days_in_month = calendar.monthrange(date.year, date.month)
+            for day in range(1, days_in_month + 1):
+                offset = first_weekday + day - 1
+                row, col = divmod(offset, 7)
+                is_selected = day == date.day
+                button = tk.Button(calendar_frame, text=str(day), width=3, relief="flat", cursor="hand2",
+                                   bg=self.colors["blue"] if is_selected else "#ffffff",
+                                   fg="#ffffff" if is_selected else self.colors["ink"],
+                                   activebackground=self.colors["blue"], activeforeground="#ffffff",
+                                   command=lambda selected_day=day: select_day(selected_day))
+                button.grid(row=row + 1, column=col, padx=2, pady=2, sticky="nsew")
+
+        def select_day(day):
+            selected[0] = selected[0].replace(day=day)
+            render_calendar()
+
+        render_calendar()
+
+        time_row = tk.Frame(picker, bg=self.colors["bg"])
+        time_row.pack(fill="x", padx=18, pady=12)
+        tk.Label(time_row, text="时间", bg=self.colors["bg"], fg=self.colors["muted"]).pack(side="left", padx=(0, 12))
+        time_vars = []
+        for label, value, upper in (("时", current.hour, 23), ("分", current.minute, 59), ("秒", current.second, 59)):
+            var = tk.StringVar(value=f"{value:02d}")
+            time_vars.append(var)
+            ttk.Spinbox(time_row, from_=0, to=upper, width=4, wrap=True, textvariable=var, format="%02.0f").pack(side="left")
+            tk.Label(time_row, text=label, bg=self.colors["bg"], fg=self.colors["muted"]).pack(side="left", padx=(3, 8))
+
+        actions = tk.Frame(picker, bg=self.colors["bg"])
+        actions.pack(fill="x", padx=18, pady=(0, 14))
+
+        def confirm():
+            try:
+                hour, minute, second = (int(var.get()) for var in time_vars)
+                chosen = selected[0].replace(hour=hour, minute=minute, second=second, microsecond=0)
+            except (ValueError, tk.TclError):
+                messagebox.showwarning(APP_NAME, "请设置有效的时、分、秒。", parent=picker)
+                return
+            target_entry.configure(state="normal")
+            target_entry.delete(0, "end")
+            target_entry.insert(0, chosen.strftime("%Y-%m-%d %H:%M:%S"))
+            target_entry.configure(state="readonly")
+            picker.destroy()
+
+        ttk.Button(actions, text="取消", command=picker.destroy).pack(side="right")
+        ttk.Button(actions, text="确定", style="Primary.TButton", command=confirm).pack(side="right", padx=(0, 8))
 
     @staticmethod
     def _add_field(tree, label_entry, value_entry):
@@ -661,9 +757,9 @@ class SignupApp(tk.Tk):
         row = tk.Frame(panel, bg="#ffffff"); row.pack(fill="x", padx=17, pady=(0, 10))
         name = ttk.Entry(row); name.insert(0, "字段名称"); name.pack(side="left", fill="x", expand=True)
         value = ttk.Entry(row); value.insert(0, "内容"); value.pack(side="left", fill="x", expand=True, padx=8)
-        ttk.Button(row, text="更新选中", command=lambda: self._update_field(tree, name, value)).pack(side="left", padx=(0, 8))
+        ttk.Button(row, text="更新资料", command=lambda: self._update_field(tree, name, value)).pack(side="left", padx=(0, 8))
         ttk.Button(row, text="＋ 添加资料", command=lambda: self._add_field(tree, name, value)).pack(side="left")
-        ttk.Button(row, text="删除选中", command=lambda: self._delete_profile(tree)).pack(side="left", padx=(8, 0))
+        ttk.Button(row, text="删除所选资料", command=lambda: self._delete_profile(tree)).pack(side="left", padx=(8, 0))
         tree = ttk.Treeview(panel, columns=("label", "value"), show="headings", height=12)
         tree.heading("label", text="资料字段"); tree.heading("value", text="内容")
         tree.column("label", width=250, anchor="w"); tree.column("value", width=500, anchor="w")
