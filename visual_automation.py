@@ -4,6 +4,7 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 import re
+import sys
 import time
 import unicodedata
 from pathlib import Path
@@ -16,7 +17,16 @@ from PIL import ImageGrab
 APP_TITLE = "报名接龙工具"
 REFERENCE_WIDTH = 621
 REFERENCE_HEIGHT = 1344
-ASSETS = Path(__file__).parent / "assets"
+_MODULE_DIR = Path(__file__).resolve().parent
+_BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", _MODULE_DIR))
+_EXECUTABLE_DIR = Path(sys.executable).resolve().parent
+_ASSET_DIR_CANDIDATES = tuple(dict.fromkeys((
+    _BUNDLE_DIR / "assets",
+    _MODULE_DIR / "assets",
+    _EXECUTABLE_DIR / "_internal" / "assets",
+    _EXECUTABLE_DIR / "assets",
+)))
+ASSETS = next((path for path in _ASSET_DIR_CANDIDATES if path.is_dir()), _ASSET_DIR_CANDIDATES[0])
 THRESHOLD = 0.78
 EARLY_MODAL_THRESHOLD = 0.80
 _OCR_ENGINE = None
@@ -169,8 +179,9 @@ def preflight_page(activate=True, binding=None):
             raise VisualAutomationError(f"缺少运行依赖 {module_name}，请重新安装 requirements.txt。") from exc
     _get_ocr_engine()
     for asset_name in ("detail-signup.png", "form-top.png", "form-submit.png", "success-top.png", "too-early-dialog.png"):
-        if not (ASSETS / asset_name).is_file():
-            raise VisualAutomationError(f"缺少页面识别模板：{asset_name}")
+        if not any((asset_dir / asset_name).is_file() for asset_dir in _ASSET_DIR_CANDIDATES):
+            checked_paths = "；".join(str(asset_dir / asset_name) for asset_dir in _ASSET_DIR_CANDIDATES)
+            raise VisualAutomationError(f"找不到页面识别模板：{asset_name}。已检查：{checked_paths}")
 
     bounds = _choose_window(binding)
     if activate:
@@ -222,9 +233,11 @@ def _template_score(image, asset_name, box):
     sx, sy = round(x * factor), round(y * factor)
     sw, sh = max(1, round(w * factor)), max(1, round(h * factor))
     region = image.crop((sx, sy, sx + sw, sy + sh))
-    template = cv2.imread(str(ASSETS / asset_name), cv2.IMREAD_COLOR)
+    asset_path = next((asset_dir / asset_name for asset_dir in _ASSET_DIR_CANDIDATES
+                       if (asset_dir / asset_name).is_file()), ASSETS / asset_name)
+    template = cv2.imread(str(asset_path), cv2.IMREAD_COLOR)
     if template is None:
-        raise VisualAutomationError(f"缺少界面识别资源：{asset_name}")
+        raise VisualAutomationError(f"无法读取界面识别资源：{asset_path}")
     template = cv2.resize(template, (sw, sh), interpolation=cv2.INTER_AREA if factor < 1 else cv2.INTER_CUBIC)
     screen = cv2.cvtColor(np.asarray(region), cv2.COLOR_RGB2GRAY)
     template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)

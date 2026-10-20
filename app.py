@@ -5,6 +5,7 @@ import base64
 import ctypes
 import json
 import os
+import queue
 import re
 import shutil
 import sys
@@ -404,44 +405,94 @@ class SignupApp(tk.Tk):
         except ImportError:
             messagebox.showerror(APP_NAME, "缺少 uiautomation 依赖。请先安装 requirements.txt 中的依赖。")
             return
-        try:
-            root = auto.GetRootControl()
-            windows = [c for c in root.GetChildren() if _control_type(c) == "WindowControl"]
-            candidates = []
-            for window in windows:
-                name = _name(window)
-                descendants = list(_descendants(window, max_depth=9))
-                has_target = any("报名接龙工具" in _name(c) for c in descendants)
-                if "QQ" in name.upper() or "报名接龙工具" in name or has_target:
-                    candidates.append((window, descendants))
-            report = []
-            for window, descendants in candidates:
-                report.append(f"窗口：{_name(window) or '[无标题]'}")
-                for control in descendants[:400]:
-                    kind = _control_type(control) or "Control"
-                    name = _name(control)
-                    # Never retrieve ValuePattern values; mask common phone-like strings in accessible names.
-                    name = re.sub(r"(?<!\d)1[3-9]\d{9}(?!\d)", "[手机号已隐藏]", name)
-                    automation_id = str(getattr(control, "AutomationId", "") or "")
-                    if name or automation_id:
-                        report.append(f"  {kind} | {name or '[无名称]'} | AutomationId={automation_id}")
-                report.append("")
-            if not candidates:
-                report = ["未找到标题含 QQ 或“报名接龙工具”的可访问窗口。", "请先打开 QQ 和目标活动详情页，再重新检查。"]
-        except Exception as exc:
-            report = [f"读取 Windows UI Automation 树失败：{exc}"]
+        result_queue = queue.Queue()
+        progress = tk.Toplevel(self)
+        progress.title("只读检查 QQ 页面")
+        progress.geometry("390x125")
+        progress.transient(self)
+        progress.configure(bg=self.colors["bg"])
+        tk.Label(progress, text="正在读取可访问控件…", bg=self.colors["bg"], fg=self.colors["ink"],
+                 font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w", padx=20, pady=(22, 8))
+        tk.Label(progress, text="QQ 的控件响应较慢时仍可继续操作主窗口。", bg=self.colors["bg"],
+                 fg=self.colors["muted"]).pack(anchor="w", padx=20)
+        progress.protocol("WM_DELETE_WINDOW", progress.destroy)
 
-        win = tk.Toplevel(self); win.title("只读检查 QQ 页面"); win.geometry("820x560"); win.transient(self)
-        win.configure(bg=self.colors["bg"])
-        tk.Label(win, text="只读页面检查", bg=self.colors["bg"], fg=self.colors["ink"], font=("Microsoft YaHei UI", 14, "bold")).pack(anchor="w", padx=18, pady=(16, 4))
-        tk.Label(win, text="仅显示可访问控件名称和 AutomationId；不会点击或填写，也不会保存检查结果。", bg=self.colors["bg"], fg=self.colors["muted"]).pack(anchor="w", padx=18, pady=(0, 10))
-        text = tk.Text(win, bg="#ffffff", fg=self.colors["ink"], relief="flat", font=("Consolas", 9), wrap="none")
-        scroll_y = ttk.Scrollbar(win, orient="vertical", command=text.yview); scroll_x = ttk.Scrollbar(win, orient="horizontal", command=text.xview)
-        text.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
-        text.pack(side="top", fill="both", expand=True, padx=(18, 0), pady=(0, 0))
-        scroll_y.place(relx=1.0, rely=0.12, relheight=0.78, anchor="ne")
-        scroll_x.pack(fill="x", padx=18, pady=(0, 12))
-        text.insert("1.0", "\n".join(report)); text.configure(state="disabled")
+        def inspect_worker():
+            report = []
+            try:
+                auto.InitializeUIAutomationInCurrentThread()
+                auto.SetGlobalSearchTimeout(1.0)
+                started = time.monotonic()
+                deadline = started + 12.0
+                max_nodes = 450
+                root = auto.GetRootControl()
+                windows = [c for c in root.GetChildren() if _control_type(c) == "WindowControl"]
+                candidates = [c for c in windows
+                              if "QQ" in _name(c).upper() or "报名接龙工具" in _name(c)]
+                count = 0
+                for window in candidates:
+                    report.append(f"窗口：{_name(window) or '[无标题]'}")
+                    stack = [(child, 1) for child in reversed(window.GetChildren())]
+                    while stack and count < max_nodes and time.monotonic() < deadline:
+                        control, depth = stack.pop()
+                        count += 1
+                        kind = _control_type(control) or "Control"
+                        name = _name(control)
+                        # Never retrieve ValuePattern values; mask common phone-like strings in accessible names.
+                        name = re.sub(r"(?<!\d)1[3-9]\d{9}(?!\d)", "[手机号已隐藏]", name)
+                        automation_id = str(getattr(control, "AutomationId", "") or "")
+                        if name or automation_id:
+                            report.append(f"  {kind} | {name or '[无名称]'} | AutomationId={automation_id}")
+                        if depth < 7 and count < max_nodes and time.monotonic() < deadline:
+                            try:
+                                children = control.GetChildren()
+                                stack.extend((child, depth + 1) for child in reversed(children))
+                            except Exception:
+                                pass
+                    report.append("")
+                if not candidates:
+                    report = ["未找到标题含 QQ 或“报名接龙工具”的可访问窗口。", "请先打开 QQ 和目标活动详情页，再重新检查。"]
+                if count >= max_nodes or time.monotonic() >= deadline:
+                    report.extend(["检查已到达安全上限，已显示部分控件。", f"最多读取 {max_nodes} 个控件或运行 12 秒。"])
+            except Exception as exc:
+                report = [f"读取 Windows UI Automation 树失败：{exc}"]
+            finally:
+                try:
+                    auto.UninitializeUIAutomationInCurrentThread()
+                except Exception:
+                    pass
+                result_queue.put(report)
+
+        def poll_result():
+            try:
+                report = result_queue.get_nowait()
+            except queue.Empty:
+                if progress.winfo_exists():
+                    self.after(100, poll_result)
+                return
+            if progress.winfo_exists():
+                progress.destroy()
+            win = tk.Toplevel(self)
+            win.title("只读检查 QQ 页面")
+            win.geometry("820x560")
+            win.transient(self)
+            win.configure(bg=self.colors["bg"])
+            tk.Label(win, text="只读页面检查", bg=self.colors["bg"], fg=self.colors["ink"],
+                     font=("Microsoft YaHei UI", 14, "bold")).pack(anchor="w", padx=18, pady=(16, 4))
+            tk.Label(win, text="仅显示可访问控件名称和 AutomationId；不会点击或填写，也不会保存检查结果。",
+                     bg=self.colors["bg"], fg=self.colors["muted"]).pack(anchor="w", padx=18, pady=(0, 10))
+            text = tk.Text(win, bg="#ffffff", fg=self.colors["ink"], relief="flat", font=("Consolas", 9), wrap="none")
+            scroll_y = ttk.Scrollbar(win, orient="vertical", command=text.yview)
+            scroll_x = ttk.Scrollbar(win, orient="horizontal", command=text.xview)
+            text.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+            text.pack(side="top", fill="both", expand=True, padx=(18, 0))
+            scroll_y.place(relx=1.0, rely=0.12, relheight=0.78, anchor="ne")
+            scroll_x.pack(fill="x", padx=18, pady=(0, 12))
+            text.insert("1.0", "\n".join(report))
+            text.configure(state="disabled")
+
+        threading.Thread(target=inspect_worker, name="qq-uia-inspector", daemon=True).start()
+        self.after(100, poll_result)
 
     def _edit_selected(self, tree):
         selection = tree.selection()
